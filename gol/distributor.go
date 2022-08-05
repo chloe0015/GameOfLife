@@ -72,6 +72,28 @@ func nextIteration(height, width int, world [][]uint8, c distributorChannels, st
 	return newWorld
 }
 
+func next(p Params, world [][]uint8, c distributorChannels, startY, endY, startX, endX int, channel chan [][]uint8) {
+	b := nextIteration(p.ImageHeight, p.ImageWidth, world, c, startY, endY, startX, endX)
+	channel <- b
+}
+
+func createChannels(p Params) []chan [][]uint8 {
+	channels := make([]chan [][]uint8, p.Threads)
+	for i := range channels {
+		channels[i] = make(chan [][]uint8)
+	}
+	return channels
+}
+
+func processPgm(channels []chan [][]uint8, p Params) [][]uint8 {
+	var finalWorld [][]uint8
+	for i := 0; i < p.Threads; i++ {
+		b := <-channels[i]
+		finalWorld = append(finalWorld, b...)
+	}
+	return finalWorld
+}
+
 func countAliveCells(p Params, world [][]uint8) []util.Cell {
 	var cells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -140,7 +162,7 @@ func distributor(p Params, c distributorChannels) {
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 	//:= strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + strconv.Itoa(p.Turns)
 	//sum := 0
-	//mutex := &sync.Mutex{}
+	mutex := &sync.Mutex{}
 
 	//create world
 	world := make([][]uint8, p.ImageHeight)
@@ -154,18 +176,32 @@ func distributor(p Params, c distributorChannels) {
 			world[x][y] = <-c.ioInput
 			if world[x][y] == 255 {
 				c.events <- CellFlipped{turn, util.Cell{Y: x, X: y}}
-				//fmt.Println("3333333")
 			}
-
 		}
 	}
 
-	for x := 0; x < p.Turns; x++ {
-		//calcuate next world
-		world = nextIteration(p.ImageHeight, p.ImageWidth, world, c, 0, p.ImageHeight, 0, p.ImageWidth)
-		c.events <- TurnComplete{turn}
+	channels := createChannels(p)
+	length := p.ImageHeight / p.ImageWidth
+	for x := 0; x <= p.Turns; x++ {
+		y := 0
+		for y < p.Threads-1 {
+			go next(p, world, c, y*length, (y+1)*length, 0, p.ImageWidth, channels[y])
+			y++
+		}
+		go next(p, world, c, y*length, p.ImageHeight, 0, p.ImageWidth, channels[p.Threads-1])
+		mutex.Lock()
+		world = processPgm(channels, p)
+		mutex.Unlock()
 		turn++
+		c.events <- TurnComplete{turn}
 	}
+
+	//for x := 0; x < p.Turns; x++ {
+	//	//calcuate next world
+	//	world = nextIteration(p.ImageHeight, p.ImageWidth, world, c, 0, p.ImageHeight, 0, p.ImageWidth)
+	//	c.events <- TurnComplete{turn}
+	//	turn++
+	//}
 
 	c.events <- FinalTurnComplete{turn, countAliveCells(p, world)}
 
