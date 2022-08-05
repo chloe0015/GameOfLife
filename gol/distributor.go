@@ -44,28 +44,28 @@ func calculateNeighbours(height int, width int, world [][]uint8, i int, j int) i
 }
 
 func nextIteration(height, width int, world [][]uint8, c distributorChannels, startY, endY, startX, endX int) [][]uint8 {
-	newWorld := make([][]uint8, len(world))
-	for x := 0; x < width; x++ {
-		newWorld[x] = make([]uint8, height)
+	newWorld := make([][]uint8, endY-startY)
+	for x := startY; x < endY; x++ {
+		newWorld[x-startY] = make([]uint8, endX-startX)
 	}
 	for y := startY; y < endY; y++ {
 		for x := startX; x < endX; x++ {
 			neighbours := calculateNeighbours(height, width, world, x, y)
 			if neighbours < 2 || neighbours > 3 {
-				newWorld[y][x] = 0
-				if newWorld[y][x] != world[y][x] {
+				newWorld[y-startY][x-startX] = 0
+				if newWorld[y-startY][x-startX] != world[y][x] {
 					cell := util.Cell{Y: y, X: x}
 					sendCellFlipped(c.events, turn, cell)
 				}
 
 			} else if neighbours == 3 {
-				newWorld[y][x] = 255
-				if newWorld[y][x] != world[y][x] {
+				newWorld[y-startY][x-startX] = 255
+				if newWorld[y-startY][x-startX] != world[y][x] {
 					cell := util.Cell{Y: y, X: x}
 					sendCellFlipped(c.events, turn, cell)
 				}
 			} else {
-				newWorld[y][x] = world[y][x]
+				newWorld[y-startY][x-startX] = world[y][x]
 			}
 		}
 	}
@@ -90,6 +90,7 @@ func processPgm(channels []chan [][]uint8, p Params) [][]uint8 {
 	for i := 0; i < p.Threads; i++ {
 		b := <-channels[i]
 		finalWorld = append(finalWorld, b...)
+		//fmt.Println(i)
 	}
 	return finalWorld
 }
@@ -155,7 +156,7 @@ func distributor(p Params, c distributorChannels) {
 	// TODO: Execute all turns of the Game of Life.
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 
-	turn := 0
+	turn = 0
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 	//:= strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + strconv.Itoa(p.Turns)
@@ -185,12 +186,12 @@ func distributor(p Params, c distributorChannels) {
 	//}
 
 	go trackTicker(c.events, tickerDone, c, p, world)
-
 	go keyPresses(p, c, world, mutex, turn)
 
 	channels := createChannels(p)
 	length := p.ImageHeight / p.ImageWidth
-	for x := 0; x <= p.Turns; x++ {
+	x := 0
+	for x <= p.Turns {
 		y := 0
 		for y < p.Threads-1 {
 			go next(p, world, c, y*length, (y+1)*length, 0, p.ImageWidth, channels[y])
@@ -200,9 +201,10 @@ func distributor(p Params, c distributorChannels) {
 		mutex.Lock()
 		world = processPgm(channels, p)
 		mutex.Unlock()
-
-		c.events <- TurnComplete{turn}
 		turn++
+		x++
+		c.events <- TurnComplete{turn}
+
 	}
 
 	//for x := 0; x < p.Turns; x++ {
