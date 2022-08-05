@@ -177,8 +177,17 @@ func distributor(p Params, c distributorChannels) {
 			}
 		}
 	}
+	//
+	//server, err := rpc.Dial("tcp", "localhost:8070")
+	//if err != nil {
+	//	fmt.Println("dialing:", err)
+	//	return
+	//}
+
 	go trackTicker(c.events, tickerDone, c, p, world)
+
 	go keyPresses(p, c, world, mutex, turn)
+
 	channels := createChannels(p)
 	length := p.ImageHeight / p.ImageWidth
 	for x := 0; x <= p.Turns; x++ {
@@ -191,8 +200,9 @@ func distributor(p Params, c distributorChannels) {
 		mutex.Lock()
 		world = processPgm(channels, p)
 		mutex.Unlock()
-		turn++
+
 		c.events <- TurnComplete{turn}
+		turn++
 	}
 
 	//for x := 0; x < p.Turns; x++ {
