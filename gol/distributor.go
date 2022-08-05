@@ -119,14 +119,12 @@ func outputPgm(p Params, c distributorChannels, world [][]uint8) {
 }
 
 //TODO ticker
-func trackTicker(tickerDone chan bool, mutex sync.Mutex, c distributorChannels, sum *int) {
+func trackTicker(event chan<- Event, tickerDone chan bool, c distributorChannels, p Params, world [][]uint8) {
 	ticker := time.NewTicker(2 * time.Second)
 	for {
 		select {
 		case <-ticker.C:
-			mutex.Lock()
-			c.events <- AliveCellsCount{turn, *sum}
-			mutex.Unlock()
+			c.events <- AliveCellsCount{turn, len(countAliveCells(p, world))}
 		case <-tickerDone:
 			return
 		}
@@ -161,8 +159,8 @@ func distributor(p Params, c distributorChannels) {
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 	//:= strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + strconv.Itoa(p.Turns)
-	//sum := 0
 	mutex := &sync.Mutex{}
+	tickerDone := make(chan bool)
 
 	//create world
 	world := make([][]uint8, p.ImageHeight)
@@ -179,7 +177,8 @@ func distributor(p Params, c distributorChannels) {
 			}
 		}
 	}
-
+	go trackTicker(c.events, tickerDone, c, p, world)
+	go keyPresses(p, c, world, mutex, turn)
 	channels := createChannels(p)
 	length := p.ImageHeight / p.ImageWidth
 	for x := 0; x <= p.Turns; x++ {
@@ -202,6 +201,7 @@ func distributor(p Params, c distributorChannels) {
 	//	c.events <- TurnComplete{turn}
 	//	turn++
 	//}
+	tickerDone <- true
 
 	c.events <- FinalTurnComplete{turn, countAliveCells(p, world)}
 
