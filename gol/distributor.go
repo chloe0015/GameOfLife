@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -18,14 +19,20 @@ type distributorChannels struct {
 	keyPresses <-chan rune
 }
 
+var turn int
+
+func sendCellFlipped(events chan<- Event, turn int, cell util.Cell) {
+	events <- CellFlipped{turn, cell}
+}
+
 func mod(n, m int) int {
 	return (n + m) % m
 }
 
 func calculateNeighbours(height int, width int, world [][]uint8, i int, j int) int {
 	count := 0
-	for x := 0; x <= 1; x++ {
-		for y := 0; y <= 1; y++ {
+	for x := -1; x <= 1; x++ {
+		for y := -1; y <= 1; y++ {
 			if x != 0 || y != 0 {
 				if world[mod(j+x, height)][mod(i+y, width)] == 255 {
 					count++
@@ -36,24 +43,33 @@ func calculateNeighbours(height int, width int, world [][]uint8, i int, j int) i
 	return count
 }
 
-func nextIteration(height, width int, world [][]uint8, startY, finishY, startX, finishX int, next chan [][]uint8) {
+func nextIteration(height, width int, world [][]uint8, c distributorChannels, startY, endY, startX, endX int) [][]uint8 {
 	newWorld := make([][]uint8, len(world))
 	for x := 0; x < width; x++ {
 		newWorld[x] = make([]uint8, height)
 	}
-	for y := startY; y < finishY; y++ {
-		for x := startX; x < finishX; x++ {
+	for y := startY; y < endY; y++ {
+		for x := startX; x < endX; x++ {
 			neighbours := calculateNeighbours(height, width, world, x, y)
 			if neighbours < 2 || neighbours > 3 {
 				newWorld[y][x] = 0
+				if newWorld[y][x] != world[y][x] {
+					cell := util.Cell{Y: y, X: x}
+					sendCellFlipped(c.events, turn, cell)
+				}
+
 			} else if neighbours == 3 {
 				newWorld[y][x] = 255
+				if newWorld[y][x] != world[y][x] {
+					cell := util.Cell{Y: y, X: x}
+					sendCellFlipped(c.events, turn, cell)
+				}
 			} else {
 				newWorld[y][x] = world[y][x]
 			}
 		}
 	}
-	next <- newWorld
+	return newWorld
 }
 
 func countAliveCells(p Params, world [][]uint8) []util.Cell {
@@ -70,28 +86,31 @@ func countAliveCells(p Params, world [][]uint8) []util.Cell {
 
 func outputPgm(p Params, c distributorChannels, world [][]uint8) {
 	c.ioCommand <- ioOutput
-	outputsString := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(p.Turns)
-	c.ioFilename <- outputsString
-	for x := 0; x < p.ImageWidth; x++ {
-		for y := 0; y < p.ImageHeight; y++ {
+	outputString := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(p.Turns)
+	c.ioFilename <- outputString
+	for x := 0; x < p.ImageHeight; x++ {
+		for y := 0; y < p.ImageWidth; y++ {
 			c.ioOutput <- world[x][y]
+		}
+	}
+	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outputString}
+}
+
+//TODO ticker
+func trackTicker(tickerDone chan bool, mutex sync.Mutex, c distributorChannels, sum *int) {
+	ticker := time.NewTicker(2 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			mutex.Lock()
+			c.events <- AliveCellsCount{turn, *sum}
+			mutex.Unlock()
+		case <-tickerDone:
+			return
 		}
 	}
 }
 
-//TODO ticker
-//func trackTicker(ticker *time.Ticker, sum *int){
-//	for{
-//		select{
-//		case <-ticker.C:
-//			mutex.Lock()
-//			c.events <- AliveCellsCount{turn, *sum}
-//			mutex.Unlock()
-//		}
-//	}
-//}
-
-//TODO:keypress os.Exit是啥呀
 func keyPresses(p Params, c distributorChannels, world [][]uint8, mutex *sync.Mutex, turn int) {
 	switch <-c.keyPresses {
 	case 's':
@@ -113,34 +132,45 @@ func keyPresses(p Params, c distributorChannels, world [][]uint8, mutex *sync.Mu
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 
-	// TODO: Create a 2D slice to store the world.
 	// TODO: Execute all turns of the Game of Life.
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 
 	turn := 0
 	c.ioCommand <- ioInput
-	string := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
-	c.ioFilename <- string
+	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
+	//:= strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + strconv.Itoa(p.Turns)
+	//sum := 0
+	//mutex := &sync.Mutex{}
 
 	//create world
 	world := make([][]uint8, p.ImageHeight)
-	for x := 0; x < p.ImageWidth; x++ {
-		world[x] = make([]uint8, p.ImageWidth)
-	}
 
+	for x := 0; x < p.ImageWidth; x++ {
+		world[x] = make([]uint8, p.ImageHeight)
+	}
 	//make initial turn
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
 			world[x][y] = <-c.ioInput
 			if world[x][y] == 255 {
 				c.events <- CellFlipped{turn, util.Cell{Y: x, X: y}}
+				//fmt.Println("3333333")
 			}
+
 		}
 	}
 
-	outputPgm(p, c, world)
+	for x := 0; x < p.Turns; x++ {
+		//calcuate next world
+		world = nextIteration(p.ImageHeight, p.ImageWidth, world, c, 0, p.ImageHeight, 0, p.ImageWidth)
+		c.events <- TurnComplete{turn}
+		turn++
+	}
 
 	c.events <- FinalTurnComplete{turn, countAliveCells(p, world)}
+
+	outputPgm(p, c, world)
+
 	c.ioCommand <- ioCheckIdle // Make sure that the Io has finished any output before exiting.
 	<-c.ioIdle
 	c.events <- StateChange{turn, Quitting}
