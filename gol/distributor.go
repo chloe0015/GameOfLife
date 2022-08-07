@@ -107,9 +107,9 @@ func countAliveCells(p Params, world [][]uint8) []util.Cell {
 	return cells
 }
 
-func outputPgm(p Params, c distributorChannels, world [][]uint8) {
+func outputPgm(p Params, c distributorChannels, world [][]uint8, turns int) {
 	c.ioCommand <- ioOutput
-	outputString := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(p.Turns)
+	outputString := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turns)
 	c.ioFilename <- outputString
 	for x := 0; x < p.ImageHeight; x++ {
 		for y := 0; y < p.ImageWidth; y++ {
@@ -120,32 +120,34 @@ func outputPgm(p Params, c distributorChannels, world [][]uint8) {
 }
 
 //TODO ticker
-func trackTicker(event chan<- Event, tickerDone chan bool, c distributorChannels, p Params, world [][]uint8) {
+func trackTicker(event chan<- Event, tickerDone chan bool, c distributorChannels, p Params, world *[][]uint8) {
 	ticker := time.NewTicker(2 * time.Second)
 	for {
 		select {
 		case <-ticker.C:
-			c.events <- AliveCellsCount{turn, len(countAliveCells(p, world))}
+			c.events <- AliveCellsCount{turn, len(countAliveCells(p, *world))}
 		case <-tickerDone:
 			return
 		}
 	}
 }
 
-func keyPresses(p Params, c distributorChannels, world [][]uint8, mutex *sync.Mutex, turn int) {
-	switch <-c.keyPresses {
-	case 's':
-		outputPgm(p, c, world)
-	case 'q':
-		outputPgm(p, c, world)
-		os.Exit(1)
-		turn = p.Turns
-	case 'p':
-		fmt.Println(turn)
-		mutex.Lock()
-		if <-c.keyPresses == 'p' {
-			fmt.Println("Continuing")
-			mutex.Unlock()
+func keyPresses(p Params, c distributorChannels, world *[][]uint8, mutex *sync.Mutex) {
+	for {
+		switch <-c.keyPresses {
+		case 's':
+			outputPgm(p, c, *world, turn)
+		case 'q':
+			outputPgm(p, c, *world, turn)
+			os.Exit(1)
+			turn = p.Turns
+		case 'p':
+			fmt.Println(turn)
+			mutex.Lock()
+			if <-c.keyPresses == 'p' {
+				fmt.Println("Continuing")
+				mutex.Unlock()
+			}
 		}
 	}
 }
@@ -185,13 +187,13 @@ func distributor(p Params, c distributorChannels) {
 	//	return
 	//}
 
-	go trackTicker(c.events, tickerDone, c, p, world)
-	go keyPresses(p, c, world, mutex, turn)
+	go trackTicker(c.events, tickerDone, c, p, &world)
+	go keyPresses(p, c, &world, mutex)
 
 	channels := createChannels(p)
-	length := p.ImageHeight / p.ImageWidth
+	length := p.ImageHeight / p.Threads
 	x := 0
-	for x <= p.Turns {
+	for x < p.Turns {
 		y := 0
 		for y < p.Threads-1 {
 			go next(p, world, c, y*length, (y+1)*length, 0, p.ImageWidth, channels[y])
@@ -200,11 +202,11 @@ func distributor(p Params, c distributorChannels) {
 		go next(p, world, c, y*length, p.ImageHeight, 0, p.ImageWidth, channels[p.Threads-1])
 		mutex.Lock()
 		world = processPgm(channels, p)
+		turn++
 		mutex.Unlock()
 		turn++
-		x++
 		c.events <- TurnComplete{turn}
-
+		x++
 	}
 
 	//for x := 0; x < p.Turns; x++ {
@@ -217,7 +219,7 @@ func distributor(p Params, c distributorChannels) {
 
 	c.events <- FinalTurnComplete{turn, countAliveCells(p, world)}
 
-	outputPgm(p, c, world)
+	outputPgm(p, c, world, p.Turns)
 
 	c.ioCommand <- ioCheckIdle // Make sure that the Io has finished any output before exiting.
 	<-c.ioIdle
