@@ -7,7 +7,9 @@ type GameOfLifeRequest struct {
 	StartY int
 	EndY   int
 	Turn   int
-	Block  int //block排序，按顺序拼图
+	Block  int
+	Height int
+	Width  int
 }
 
 type GameOfLifeResponse struct {

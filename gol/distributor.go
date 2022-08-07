@@ -2,10 +2,12 @@ package gol
 
 import (
 	"fmt"
+	"net/rpc"
 	"os"
 	"strconv"
 	"sync"
 	"time"
+	"uk.ac.bris.cs/gameoflife/stubs"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -72,9 +74,39 @@ func nextIteration(height, width int, world [][]uint8, c distributorChannels, st
 	return newWorld
 }
 
-func next(p Params, world [][]uint8, c distributorChannels, startY, endY, startX, endX int, channel chan [][]uint8) {
-	b := nextIteration(p.ImageHeight, p.ImageWidth, world, c, startY, endY, startX, endX)
-	channel <- b
+func sentCellFlipped(newWorld [][]uint8, oldWorld [][]uint8, turn int, c distributorChannels) {
+	for i := range oldWorld {
+		for j := range oldWorld[i] {
+			if oldWorld[i][j] != newWorld[i][j] {
+				c.events <- CellFlipped{CompletedTurns: turn,
+					Cell: util.Cell{Y: i, X: j}}
+			}
+		}
+	}
+}
+
+func MakeCall(client *rpc.Client, StartX, StartY, EndX, EndY, turn, height, width int, id int, world [][]uint8) *stubs.GameOfLifeResponse {
+	request := stubs.GameOfLifeRequest{
+		StartX: StartX,
+		StartY: StartY,
+		EndX:   EndX,
+		EndY:   EndY,
+		Turn:   turn,
+		Block:  id,
+		World:  world,
+		Height: height,
+		Width:  width,
+	}
+	response := new(stubs.GameOfLifeResponse)
+
+	client.Call("Server.HandleGOLRequest", request, response)
+
+	return response
+}
+
+func next(client *rpc.Client, world [][]uint8, height, width, startY, endY, startX, endX int, channel chan [][]uint8) {
+	b := MakeCall(client, startX, startY, endX, endY, turn, height, width, 1, world)
+	channel <- b.World
 }
 
 func createChannels(p Params) []chan [][]uint8 {
@@ -160,7 +192,6 @@ func distributor(p Params, c distributorChannels) {
 	turn = 0
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
-	//:= strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + strconv.Itoa(p.Turns)
 	mutex := &sync.Mutex{}
 	tickerDone := make(chan bool)
 
@@ -179,7 +210,19 @@ func distributor(p Params, c distributorChannels) {
 			}
 		}
 	}
-	//
+
+	server, err := rpc.Dial("tcp", "localhost:8070")
+	if err != nil {
+		fmt.Println("dialing:", err)
+		return
+	}
+
+	server2, err := rpc.Dial("tcp", "localhost:8080")
+	if err != nil {
+		fmt.Println("dialing:", err)
+		return
+	}
+
 	//server, err := rpc.Dial("tcp", "localhost:8070")
 	//if err != nil {
 	//	fmt.Println("dialing:", err)
@@ -188,19 +231,23 @@ func distributor(p Params, c distributorChannels) {
 
 	go trackTicker(c.events, tickerDone, c, p, &world)
 	go keyPresses(p, c, &world, mutex)
-
+	//2 servers
+	p.Threads = 2
 	channels := createChannels(p)
 	length := p.ImageHeight / p.Threads
 	x := 0
 	for x < p.Turns {
 		y := 0
 		for y < p.Threads-1 {
-			go next(p, world, c, y*length, (y+1)*length, 0, p.ImageWidth, channels[y])
+			go next(server, world, p.ImageHeight, p.ImageWidth, y*length, (y+1)*length, 0, p.ImageWidth, channels[y])
 			y++
 		}
-		go next(p, world, c, y*length, p.ImageHeight, 0, p.ImageWidth, channels[p.Threads-1])
+		go next(server2, world, p.ImageHeight, p.ImageWidth, y*length, p.ImageHeight, 0, p.ImageWidth, channels[p.Threads-1])
 		mutex.Lock()
-		world = getFinalWorld(channels, p)
+		newWorld := getFinalWorld(channels, p)
+		sentCellFlipped(newWorld, world, turn, c)
+		world = newWorld
+
 		turn++
 		mutex.Unlock()
 		c.events <- TurnComplete{turn}
