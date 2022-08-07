@@ -90,7 +90,6 @@ func getFinalWorld(channels []chan [][]uint8, p Params) [][]uint8 {
 	for i := 0; i < p.Threads; i++ {
 		b := <-channels[i]
 		finalWorld = append(finalWorld, b...)
-		//fmt.Println(i)
 	}
 	return finalWorld
 }
