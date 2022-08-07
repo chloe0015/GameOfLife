@@ -85,7 +85,7 @@ func createChannels(p Params) []chan [][]uint8 {
 	return channels
 }
 
-func processPgm(channels []chan [][]uint8, p Params) [][]uint8 {
+func getFinalWorld(channels []chan [][]uint8, p Params) [][]uint8 {
 	var finalWorld [][]uint8
 	for i := 0; i < p.Threads; i++ {
 		b := <-channels[i]
@@ -201,10 +201,9 @@ func distributor(p Params, c distributorChannels) {
 		}
 		go next(p, world, c, y*length, p.ImageHeight, 0, p.ImageWidth, channels[p.Threads-1])
 		mutex.Lock()
-		world = processPgm(channels, p)
+		world = getFinalWorld(channels, p)
 		turn++
 		mutex.Unlock()
-		turn++
 		c.events <- TurnComplete{turn}
 		x++
 	}
